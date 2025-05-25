@@ -1,19 +1,14 @@
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
-
+#include "MPU6050.h"
 #include "SPI.h"
 #include "Adafruit_GFX.h"
 #include "Adafruit_GC9A01A.h" 
 #include "Wire.h"
 
-const char* ssid = "onc-wifi-5g";
-const char* password = "Passw0rd123";
 const unsigned int LIGHT_SENSOR = A0;
 #define TFT_DC D3
 #define TFT_CS D8
-#define DEG2RAD 0.0174532925  
+#define DEG2RAD 0.0174532925
 // some extra colors
 #define BLACK      0x0000
 #define RED        0xF800
@@ -21,105 +16,63 @@ const unsigned int LIGHT_SENSOR = A0;
 #define ORANGE     0xFBE0
 #define GREY       0x84B5
 #define BORDEAUX   0xA000
+#define GREEN      0x07E0
+#define BLUE       0x001F
 
-float sx = 0, sy = 1, mx = 1, my = 0, hx = -1, hy = 0;                              // saved H, M, S x & y multipliers
-float sdeg = 0, mdeg= 0, hdeg = 0;
-uint16_t osx = 120, osy = 120, omx = 120, omy = 120, ohx = 120, ohy = 120;          // saved H, M, S x & y coords
-uint16_t x0=0, x1=0, yy0=0, yy1=0;  
 Adafruit_GC9A01A tft(TFT_CS, TFT_DC); 
-//WiFiServer server(80);
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "ntp0.ntp-servers.net", 0, 60000);  // Update every 60 seconds
+MPU6050 mpu;
 
 
-// MPU6050 Slave Device Address
-const uint8_t MPU6050SlaveAddress = 0x68;
-
-void I2C_Write(uint8_t deviceAddress, uint8_t regAddress, uint8_t data){
-  Wire.beginTransmission(deviceAddress);
-  Wire.write(regAddress);
-  Wire.write(data);
-  Wire.endTransmission();
-}
-
-//configure MPU6050
-void MPU6050_Init()
-{
-  Wire.begin(D2, D1);
-  delay(150);
-  // MPU6050 few configuration register addresses
-  const uint8_t MPU6050_REGISTER_SMPLRT_DIV   =  0x19;
-  const uint8_t MPU6050_REGISTER_USER_CTRL    =  0x6A;
-  const uint8_t MPU6050_REGISTER_PWR_MGMT_1   =  0x6B;
-  const uint8_t MPU6050_REGISTER_PWR_MGMT_2   =  0x6C;
-  const uint8_t MPU6050_REGISTER_CONFIG       =  0x1A;
-  const uint8_t MPU6050_REGISTER_GYRO_CONFIG  =  0x1B;
-  const uint8_t MPU6050_REGISTER_ACCEL_CONFIG =  0x1C;
-  const uint8_t MPU6050_REGISTER_FIFO_EN      =  0x23;
-  const uint8_t MPU6050_REGISTER_INT_ENABLE   =  0x38;
-  const uint8_t MPU6050_REGISTER_SIGNAL_PATH_RESET  = 0x68;
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_SMPLRT_DIV, 0x07);
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_PWR_MGMT_1, 0x01);
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_PWR_MGMT_2, 0x00);
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_CONFIG, 0x00);
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_GYRO_CONFIG, 0x00);//set +/-250 degree/second full scale
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_ACCEL_CONFIG, 0x00);// set +/- 2g full scale
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_FIFO_EN, 0x00);
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_INT_ENABLE, 0x01);
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_SIGNAL_PATH_RESET, 0x00);
-  I2C_Write(MPU6050SlaveAddress, MPU6050_REGISTER_USER_CTRL, 0x00);
-}
-
+const uint16_t AccelScaleFactor = 16384;
 // values from MPU6050
-int16_t AccelX, AccelY, AccelZ, Temperature, GyroX, GyroY, GyroZ;
+int16_t AccelX = 0;
+int16_t AccelY = 0;
+int16_t AccelZ = 0;
+int16_t GyroX = 0;
+int16_t GyroY = 0;
+int16_t GyroZ = 0;
 
-void Read_MPU_RawValue(uint8_t deviceAddress)
+// return if is device is horizontally placed
+bool isHorizontal()
 {
-  const uint8_t MPU6050_REGISTER_ACCEL_XOUT_H =  0x3B;
-  Wire.beginTransmission(deviceAddress);
-  Wire.write(MPU6050_REGISTER_ACCEL_XOUT_H);
-  Wire.endTransmission();
-  Wire.requestFrom(deviceAddress, (uint8_t)14);
-  AccelX = (((int16_t)Wire.read()<<8) | Wire.read());
-  AccelY = (((int16_t)Wire.read()<<8) | Wire.read());
-  AccelZ = (((int16_t)Wire.read()<<8) | Wire.read());
-  Temperature = (((int16_t)Wire.read()<<8) | Wire.read());
-  GyroX = (((int16_t)Wire.read()<<8) | Wire.read());
-  GyroY = (((int16_t)Wire.read()<<8) | Wire.read());
-  GyroZ = (((int16_t)Wire.read()<<8) | Wire.read());
+  if (abs((double)AccelZ/AccelScaleFactor) > 0.15)
+    return true;
+  return false;
 }
 
 void readMPUData(float &roll, float &pitch) 
 {
   // sensitivity scale factor respective to full scale setting provided in datasheet 
-  const uint16_t AccelScaleFactor = 16384;
   const uint16_t GyroScaleFactor = 131;
-  Read_MPU_RawValue(MPU6050SlaveAddress);
+  mpu.getMotion6(&AccelX, &AccelY, &AccelZ, &GyroX, &GyroY, &GyroZ);
   //divide each with their sensitivity scale factor
   const double Ax = (double)AccelX/AccelScaleFactor;
   const double Ay = (double)AccelY/AccelScaleFactor;
   const double Az = (double)AccelZ/AccelScaleFactor;
-  const double T = (double)Temperature/340+36.53; //temperature formula
   const double Gx = (double)GyroX/GyroScaleFactor;
   const double Gy = (double)GyroY/GyroScaleFactor;
   const double Gz = (double)GyroZ/GyroScaleFactor;
 
+  // formula from https://wiki.dfrobot.com/How_to_Use_a_Three-Axis_Accelerometer_for_Tilt_Sensing
+  if (isHorizontal())
+  {
+    roll = atan2(Ay , Az) * 180.0 / PI;
+    pitch = atan2(-Ax , sqrt(Ay * Ay + Az * Az)) * 180.0 / PI; //account for roll already applied
+  }
+  else
+  {
+    roll = 0;
+    pitch = atan2(-Ax , sqrt(Ay * Ay + Az * Az)) * 180.0 / PI; //account for roll already applied
+  }
+
   Serial.print("Ax: "); Serial.print(Ax);
   Serial.print(" Ay: "); Serial.print(Ay);
   Serial.print(" Az: "); Serial.print(Az);
-  Serial.print(" T: "); Serial.print(T);
   Serial.print(" Gx: "); Serial.print(Gx);
   Serial.print(" Gy: "); Serial.print(Gy);
-  Serial.print(" Gz: "); Serial.println(Gz);
-
-  // formula from https://wiki.dfrobot.com/How_to_Use_a_Three-Axis_Accelerometer_for_Tilt_Sensing
-  roll = atan2(Ay , Az) * 180.0 / PI;
-  pitch = atan2(-Ax , sqrt(Ay * Ay + Az * Az)) * 180.0 / PI; //account for roll already applied
-
-  Serial.print("roll = ");
-  Serial.print(roll,1);
-  Serial.print(", pitch = ");
-  Serial.println(pitch,1);
+  Serial.print(" Gz: "); Serial.print(Gz);
+  Serial.print(" Roll: "); Serial.print(roll, 1);
+  Serial.print(" Pitch: "); Serial.println(pitch,1);
 }
 
 void createDial ()
@@ -127,196 +80,213 @@ void createDial ()
   tft.setTextColor (WHITE, GREY);  
   tft.fillCircle(120, 120, 120, BLACK);   
 
-  // line segments for seconds parts
-  for (int i = 0; i<360; i+= 2)
+  // line small segment ruller
+  for (int i = 0; i < 360; i+= 2)
   {                                                   
-     sx = cos((i-90)*DEG2RAD);
-     sy = sin((i-90)*DEG2RAD);
-     x0 = sx*118+120;
-     yy0 = sy*118+120;
-     x1 = sx*114+120;
-     yy1 = sy*114+120;
-     tft.drawLine(x0, yy0, x1, yy1, WHITE);
-  }
-
-  // line segments for seconds
-  for (int i = 0; i<360; i+= 6)
-  {                                                   
-     sx = cos((i-90)*DEG2RAD);
-     sy = sin((i-90)*DEG2RAD);
-     x0 = sx*118+120;
-     yy0 = sy*118+120;
-     x1 = sx*110+120;
-     yy1 = sy*110+120;
+     const float sx = cos((i-90)*DEG2RAD);
+     const float sy = sin((i-90)*DEG2RAD);
+     const int16_t x0 = sx*118+120;
+     const int16_t yy0 = sy*118+120;
+     const int16_t x1 = sx*114+120;
+     const int16_t yy1 = sy*114+120;
      tft.drawLine(x0, yy0, x1, yy1, WHITE);
   }
    
-  // line segments for hours parts
-  for (int i = 0; i<360; i+= 30)
+  // draw 45 degree segments
+  for (int i = 0; i<360; i+= 45)
   {
-     sx = cos((i-90)*DEG2RAD);
-     sy = sin((i-90)*DEG2RAD);
-     x0 = sx*108+120;
-     yy0 = sy*108+120;
-     x1 = sx*85+120;
-     yy1 = sy*85+120;
+     const float sx = cos((i-90)*DEG2RAD);
+     const float sy = sin((i-90)*DEG2RAD);
+     const int16_t x0 = sx*108+120;
+     const int16_t yy0 = sy*108+120;
+     const int16_t x1 = sx*85+120;
+     const int16_t yy1 = sy*85+120;
      tft.drawLine(x0, yy0, x1, yy1, WHITE);
-   
-     if(i==0)
-     { 
-      tft.fillCircle (x0-5, yy0, 4, WHITE);
-      tft.fillCircle (x0+5, yy0, 4, WHITE);
-     }
   }
 }
 
-void setup() {
+int getLightLevel()
+{
+  // get the light level
+  const int raw_light = analogRead(LIGHT_SENSOR); // read the raw value from light_sensor pin (A3)
+  const int light = map(raw_light, 0, 1023, 0, 100); // map the value from 0, 1023 to 0, 100
+  return light;
+}
+
+void drawCurrentState()
+{
+  // get the roll and pitch
+  float roll, pitch;
+  readMPUData(roll, pitch);
+  const int centerX = 120;
+  const int centerY = 120;
+  static int oldX = centerX;
+  static int oldY = centerY;
+  const int maxOffset = 70;
+  const int radius = 5;
+
+  tft.setTextSize(2);
+
+  // Draw red circle based on roll and pitch if horizontal
+  if (isHorizontal()) 
+  {
+    // Map roll and pitch to display coordinates
+    // Assume roll and pitch range from -45 to +45 degrees
+    const float maxAngle = 90.0;
+    // Clamp roll and pitch
+    float clampedRoll = constrain(roll, -maxAngle, maxAngle);
+    float clampedPitch = constrain(pitch, -maxAngle, maxAngle);
+    // Map to display (move circle from center to edge)
+    const int x = centerX - (int)(clampedRoll / maxAngle * (maxOffset - radius));
+    const int y = centerY + (int)(clampedPitch / maxAngle * (maxOffset - radius));
+    // Clear the previous circle
+    tft.fillCircle(oldX, oldY, radius, BLACK);
+    // draw central mark
+    tft.fillCircle(centerX, centerY, radius + 2, WHITE);
+    // Draw the red circle
+    tft.fillCircle(x, y, radius, RED);
+    oldX = x; // update oldX
+    oldY = y; // update oldY
+  }
+  else
+  {
+    // Clear the previous circle
+    tft.fillCircle(oldX, oldY, radius, BLACK);
+    // clear central mark
+    tft.fillCircle(centerX, centerY, radius + 2, BLACK);
+  }
+  // draw pitch and roll 
+  // draw roll
+  tft.fillRect(60, 95, 43, 20, BLACK);
+  tft.setCursor(60, 96);
+  if(roll < 0)
+    tft.setTextColor (BLUE, BLACK);
+  else
+    tft.setTextColor (RED, BLACK);
+  if (isHorizontal())
+    tft.print(abs((int)roll));
+  else
+  {
+    const int tmp = (int)(10.0*AccelZ/AccelScaleFactor);
+    tft.print(1.0*tmp/10, 1);
+  }
+  // draw pitch
+  tft.fillRect(160, 95, 40, 20, BLACK);
+  tft.setCursor(160, 95);
+  if(pitch < 0)
+    tft.setTextColor (BLUE, BLACK);
+  else
+    tft.setTextColor (RED, BLACK);
+  if (isHorizontal())
+    tft.print(abs((int)pitch));
+  else
+    tft.print(abs(89 - (int)pitch));
+  // Calculate summary acceleration (magnitude)
+  double Ax = (double)AccelX / AccelScaleFactor;
+  double Ay = (double)AccelY / AccelScaleFactor;
+  double Az = (double)AccelZ / AccelScaleFactor;
+  double summaryAccel = sqrt(Ax * Ax + Ay * Ay + Az * Az);
+  // Output it in the center of the screen
+  tft.fillRect(90, 160, 60, 20, BLACK);
+  tft.setCursor(92, 161);
+  tft.setTextColor(WHITE, BLACK);
+  tft.print(summaryAccel, 2);
+}
+
+void calibration() 
+{
+  const int BUFFER_SIZE = 100; // number of measurements for averaging
+  long offsets[6];
+  long offsetsOld[6];
+  int16_t mpuGet[6];
+  // use standard accuracy
+  mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
+  mpu.setFullScaleGyroRange(MPU6050_GYRO_FS_250);
+  // reset offsets
+  mpu.setXAccelOffset(0);
+  mpu.setYAccelOffset(0);
+  mpu.setZAccelOffset(0);
+  mpu.setXGyroOffset(0);
+  mpu.setYGyroOffset(0);
+  mpu.setZGyroOffset(0);
+  delay(10);
+  tft.setTextColor (WHITE, BLACK);
+  tft.setCursor(20, 100);
+  tft.setTextSize(1);
+  tft.println("Calibration start. It will take about 5 seconds");
+  for (byte n = 0; n < 10; n++) 
+  {     // 10 calibration iterations
+    for (byte j = 0; j < 6; j++) 
+    {    // reset calibration array
+      offsets[j] = 0;
+    }
+    for (byte i = 0; i < 100 + BUFFER_SIZE; i++) 
+    { // perform BUFFER_SIZE measurements for averaging
+      mpu.getMotion6(&mpuGet[0], &mpuGet[1], &mpuGet[2], &mpuGet[3], &mpuGet[4], &mpuGet[5]);
+      if (i >= 99) 
+      {                         // skip the first 99 measurements
+        for (byte j = 0; j < 6; j++) 
+        {
+          offsets[j] += (long)mpuGet[j];   // write to calibration array
+        }
+      }
+    }
+    for (byte i = 0; i < 6; i++) 
+    {
+      offsets[i] = offsetsOld[i] - ((long)offsets[i] / BUFFER_SIZE); // take into account previous calibration
+      if (i == 2) offsets[i] += 16384;                               // if Z axis, calibrate to 16384
+      offsetsOld[i] = offsets[i];
+    }
+    // set new offsets
+    mpu.setXAccelOffset(offsets[0] / 8);
+    mpu.setYAccelOffset(offsets[1] / 8);
+    mpu.setZAccelOffset(offsets[2] / 8);
+    mpu.setXGyroOffset(offsets[3] / 4);
+    mpu.setYGyroOffset(offsets[4] / 4);
+    mpu.setZGyroOffset(offsets[5] / 4);
+    delay(2);
+  }
+  // output to port
+  tft.println("Calibration end. Your offsets:");
+  tft.println("accX accY accZ gyrX gyrY gyrZ");
+  tft.print(mpu.getXAccelOffset()); tft.print(", ");
+  tft.print(mpu.getYAccelOffset()); tft.print(", ");
+  tft.print(mpu.getZAccelOffset()); tft.print(", ");
+  tft.print(mpu.getXGyroOffset()); tft.print(", ");
+  tft.print(mpu.getYGyroOffset()); tft.print(", ");
+  tft.print(mpu.getZGyroOffset()); tft.println(" ");
+
+  Serial.println("Calibration end. Your offsets:");
+  Serial.println("accX accY accZ gyrX gyrY gyrZ");
+  Serial.println(mpu.getXAccelOffset()); tft.print(", ");
+  Serial.println(mpu.getYAccelOffset()); tft.print(", ");
+  Serial.println(mpu.getZAccelOffset()); tft.print(", ");
+  Serial.println(mpu.getXGyroOffset()); tft.print(", ");
+  Serial.println(mpu.getYGyroOffset()); tft.print(", ");
+  Serial.println(mpu.getZGyroOffset()); tft.println(" ");
+}
+void setup() 
+{
+  Wire.begin(D2, D1);
   Serial.begin(115200);
-  MPU6050_Init();
+  mpu.initialize();
+  delay(1000);
   tft.begin (); 
   tft.setRotation (2);
-  tft.fillScreen (BLACK);
-  tft.setTextSize (1);
-  tft.setTextColor (WHITE, BLACK);
-  tft.setCursor(0, 120);
-  
-  // Connect to WiFi network
-  Serial.println();
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  tft.print("Connecting to ");
-  tft.println(ssid);
- 
-  WiFi.begin(ssid, password);
- 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    tft.print(".");
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  tft.fillScreen (BLACK);
-  tft.setCursor(0, 120);
-  tft.print("WiFi connected ");
-  tft.println(WiFi.localIP());
- 
-  // Start the server
-  //server.begin();
-  //Serial.println("Server started");
- 
-  // Print the IP address
-  Serial.print("Use this URL to connect: ");
-  Serial.print("http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("/");
-
   tft.fillScreen (BLACK);  
-  createDial (); 
-
-  timeClient.begin();
+  delay(1000);
+  mpu.setXAccelOffset(-7288);
+  mpu.setYAccelOffset(4483);
+  mpu.setZAccelOffset(10167);
+  mpu.setXGyroOffset(-38);
+  mpu.setYGyroOffset(-40);
+  mpu.setZGyroOffset(-40);
+  //calibration();
+  delay(1000);
+  createDial ();
 }
 
 void loop() 
 {
-  // get current light 
-  static bool initial = true;
-
-  // update the time
-  timeClient.update();
-  Serial.println(timeClient.getFormattedTime()); // print the light
-
-  // get the light level
-  const int raw_light = analogRead(LIGHT_SENSOR); // read the raw value from light_sensor pin (A3)
-  const int light = map(raw_light, 0, 1023, 0, 100); // map the value from 0, 1023 to 0, 100
-  Serial.print("Light level: "); 
-  Serial.println(light); // print the light 
-
-  // get the rool and pitch
-  float roll, pitch;
-  readMPUData(roll, pitch);
-
-  // pre-compute hand degrees, x & y coords for a fast screen update
-  const int ss = timeClient.getSeconds();
-  sdeg = ss * 6;                                                                     // 0-59 -> 0-354
-  mdeg = timeClient.getMinutes() * 6 + sdeg * 0.01666667;                                                     // 0-59 -> 0-360 - includes seconds
-  hdeg = ((timeClient.getHours() + 3) % 12) * 30 + mdeg * 0.0833333;                                                     // 0-11 -> 0-360 - includes minutes and seconds
-  hx = cos((hdeg - 90) * DEG2RAD);    
-  hy = sin((hdeg - 90) * DEG2RAD);
-  mx = cos((mdeg - 90) * DEG2RAD);    
-  my = sin((mdeg - 90) * DEG2RAD);
-  sx = cos((sdeg - 90) * DEG2RAD);    
-  sy = sin((sdeg - 90) * DEG2RAD);
-
-  // erase hour and minute hand positions every minute
-  if (ss == 0 || initial) 
-  {
-    initial = 0;
-    tft.drawLine(ohx, ohy, 120, 121, BLACK);                                     
-    ohx = hx * 62 + 121;    
-    ohy = hy * 62 + 121;
-    tft.drawLine(omx, omy, 120, 121, BLACK);
-    omx = mx * 84 + 120;
-    omy = my * 84 + 121;
-  }
-
-  // Output values to the screen
-  tft.setTextSize(2);
-  tft.setTextColor(WHITE, BLACK);
-  tft.setCursor(92, 60);
-  tft.printf("%.1f", roll);
-  tft.setCursor(92, 180);
-  tft.printf("%.1f", pitch);
-  tft.setCursor(50, 112);
-  tft.printf("%d", light);
-
-  // Redraw new hand positions, hour and minute hands not erased here to avoid flicker
-  tft.drawLine(osx, osy, 120, 121, BLACK);
-  osx = sx * 90 + 121;
-  osy = sy * 90 + 121;
-  tft.drawLine(osx, osy, 120, 121, RED);
-  tft.drawLine(ohx, ohy, 120, 121, WHITE);
-  tft.drawLine(omx, omy, 120, 121, WHITE);
-  tft.drawLine(osx, osy, 120, 121, RED);
-  tft.fillCircle(120, 121, 3, RED);
-
-  /*
-  // Check if a client has connected
-  WiFiClient client = server.available();
-  if (!client) {
-    return;
-  }
-  // Wait until the client sends some data
-  Serial.println("new client");
-  while(!client.available()){
-    delay(1);
-  }
- 
-  // Read the first line of the request
-  String request = client.readStringUntil('\r');
-  Serial.println(request);
-  client.flush();
- 
-  // Match the request
- 
-  // Return the response
-  timeClient.update();
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: text/html");
-  client.println(""); //  do not forget this one
-  client.println("<!DOCTYPE HTML>");
-  client.println("<html lang=\"en\">");
-  client.println("<head>");
-  client.println("    <meta charset=\"UTF-8\">");
-  client.println("    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
-  client.println("    <title>Integer Display</title>");
-  client.println("</head>");
-  client.println("<body>");
-  client.println("    <div id=\"id_light\">Current light level: " + String(light) + "</div>");
-  client.println("    <div id=\"id_time\">Current time: " + timeClient.getFormattedTime() + "</div>");
-  client.println("</body>");
-  client.println("</html>");
-  */
+  drawCurrentState();
 }
