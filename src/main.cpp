@@ -5,7 +5,6 @@
 #include "Adafruit_GC9A01A.h" 
 #include "Wire.h"
 
-const unsigned int LIGHT_SENSOR = A0;
 #define TFT_DC D3
 #define TFT_CS D8
 #define DEG2RAD 0.0174532925
@@ -18,12 +17,11 @@ const unsigned int LIGHT_SENSOR = A0;
 #define BORDEAUX   0xA000
 #define GREEN      0x07E0
 #define BLUE       0x001F
+const uint16_t AccelScaleFactor = 16384;
 
 Adafruit_GC9A01A tft(TFT_CS, TFT_DC); 
 MPU6050 mpu;
 
-
-const uint16_t AccelScaleFactor = 16384;
 // values from MPU6050
 int16_t AccelX = 0;
 int16_t AccelY = 0;
@@ -65,6 +63,7 @@ void readMPUData(float &roll, float &pitch)
     pitch = atan2(-Ax , sqrt(Ay * Ay + Az * Az)) * 180.0 / PI; //account for roll already applied
   }
 
+  return;
   Serial.print("Ax: "); Serial.print(Ax);
   Serial.print(" Ay: "); Serial.print(Ay);
   Serial.print(" Az: "); Serial.print(Az);
@@ -105,27 +104,168 @@ void createDial ()
   }
 }
 
-int getLightLevel()
+// Indicator class definition
+class Indicator 
 {
-  // get the light level
-  const int raw_light = analogRead(LIGHT_SENSOR); // read the raw value from light_sensor pin (A3)
-  const int light = map(raw_light, 0, 1023, 0, 100); // map the value from 0, 1023 to 0, 100
-  return light;
-}
+public:
+    Indicator(int x, int y, bool showInt = true) : m_x(x), m_y(y), m_maxTimestamp(millis()), m_index(0), m_value(0.0f),
+      m_oldShownValue(0.), m_oldShownMaxValue(0.), m_visible(true), m_showInt(showInt)
+    {
+        for (int i = 0; i < MAX_INDICATOR_SIZE; ++i) 
+            m_maxValue[i] = 0.0f; // initialize max values
+    }
+    void setVisible(bool visible) 
+    {
+      if(m_visible != visible) 
+        {
+          m_visible = visible;
+          if (m_visible) 
+            update(); // update the indicator if it is visible
+        }
+    }
+    void setValue(float value) 
+    {
+        unsigned long now = millis();
+        // each second we start to feel a new cell. After 10 seconsds all cell will be filled
+        if (now - m_maxTimestamp > (m_index + 1) * 1000 && m_index < MAX_INDICATOR_SIZE - 1)
+        {
+            ++m_index;
+        }
+        // if we feeled all cells we need to shift them each seconds
+        if (m_index == MAX_INDICATOR_SIZE - 1) 
+        {
+          // each seconds we shift all values
+          if (now - m_maxTimestamp > 1000) 
+          {
+            for (int i = 0; i < MAX_INDICATOR_SIZE - 1; ++i) 
+              m_maxValue[i] = m_maxValue[i + 1]; // shift values
+            m_maxValue[MAX_INDICATOR_SIZE - 1] = 0; // reset last value
+            // update the timestamp
+            m_maxTimestamp = now;
+          }
+        }
+        // update the value
+        m_value = value; // store the current value
+        for (int i = 0; i <= m_index; ++i) 
+        {
+          if(abs(m_maxValue[i]) < abs(value))
+            m_maxValue[i] = value;
+        }
+        update();
+    }
+    void update()
+    {
+      if (!m_visible)
+      {
+        Serial.println("Indicator values: ");
+        for (int i = 0; i < MAX_INDICATOR_SIZE; ++i)
+        {
+          Serial.print(" ,");
+          Serial.print(m_maxValue[i]);
+        }
+        Serial.println();
+      }
+      else
+      {
+        if (m_showInt)
+        {
+          const int value2show = abs((int)m_value);
+          const int maxValue2show = abs((int)m_maxValue[0]);
+          if ((int)m_oldShownValue != value2show || (int)m_oldShownMaxValue != maxValue2show)
+          {
+            tft.fillRect(m_x, m_y, 50, 50, BLACK);
+            tft.setCursor(m_x, m_y);
+            if(isHorizontal())
+            {
+              if(m_value < 0)
+                tft.setTextColor (BLUE, BLACK);
+              else
+                tft.setTextColor (RED, BLACK);
+            }
+            else
+              tft.setTextColor(ORANGE, BLACK);
+            tft.print(value2show);
+            m_oldShownValue = value2show; // update old shown value
+            tft.setTextColor(ORANGE, BLACK);
+            tft.setCursor(m_x, m_y + 20);
+            tft.print(maxValue2show);
+            m_oldShownMaxValue = maxValue2show; // update old shown max value
+          }
+        }
+        else
+        {
+          const float value2show = m_value;
+          const float maxValue2show = m_maxValue[0];
+          if (abs(m_oldShownValue - value2show) > 0.05 || abs(m_oldShownMaxValue - maxValue2show) > 0.05)
+          {
+            tft.fillRect(m_x, m_y, 50, 50, BLACK);
+            tft.setCursor(m_x, m_y);
+            if(isHorizontal())
+            {
+              if(m_value < 0)
+                tft.setTextColor (BLUE, BLACK);
+              else
+                tft.setTextColor (RED, BLACK);
+            }
+            else
+              tft.setTextColor(ORANGE, BLACK);
+            tft.print(value2show, 2);
+            m_oldShownValue = value2show; // update old shown value
+            tft.setTextColor(ORANGE, BLACK);
+            tft.setCursor(m_x, m_y + 20);
+            tft.print(maxValue2show, 2);
+            m_oldShownMaxValue = maxValue2show; // update old shown max value
+          }
+        }
+      }
+    }
+private:
+    int m_x = 0;
+    int  m_y = 0;
+    float m_oldShownValue = 0.;
+    float m_oldShownMaxValue = 0.;
+    static const int MAX_INDICATOR_SIZE = 10; // maximum size of the indicator
+    // array to store max values
+    float m_maxValue[MAX_INDICATOR_SIZE];
+    float m_value = 0.;
+    int m_index = 0; // current index which we feel
+    unsigned long m_maxTimestamp;
+    bool m_visible = true;
+    bool m_showInt = true; // show integer values or float
+};
+
+Indicator rollIndicator(60, 95);
+Indicator pitchIndicator(160, 95);
+Indicator accelIndicator(90, 160, false); // show float values
 
 void drawCurrentState()
 {
   // get the roll and pitch
   float roll, pitch;
   readMPUData(roll, pitch);
+  // constants to draw 
   const int centerX = 120;
   const int centerY = 120;
-  static int oldX = centerX;
-  static int oldY = centerY;
   const int maxOffset = 70;
   const int radius = 5;
+  // variables to store old data
+  static int oldX = -120; // set to a value that is not possible
+  static int oldY = -120; // set to a value that is not possible
 
   tft.setTextSize(2);
+
+  // draw roll
+  rollIndicator.setValue(isHorizontal() ? roll : 100.0*AccelZ/AccelScaleFactor); // update the indicator with roll value
+  
+  // draw pitch
+  pitchIndicator.setValue(isHorizontal() ? pitch : 89. - pitch); // update the indicator with pitch value
+  
+  // Calculate summary acceleration (magnitude)
+  double Ax = (double)AccelX / AccelScaleFactor;
+  double Ay = (double)AccelY / AccelScaleFactor;
+  double Az = (double)AccelZ / AccelScaleFactor;
+  double summaryAccel = sqrt(Ax * Ax + Ay * Ay + Az * Az);
+  accelIndicator.setValue(summaryAccel); // update the indicator with summary acceleration value
 
   // Draw red circle based on roll and pitch if horizontal
   if (isHorizontal()) 
@@ -139,14 +279,18 @@ void drawCurrentState()
     // Map to display (move circle from center to edge)
     const int x = centerX - (int)(clampedRoll / maxAngle * (maxOffset - radius));
     const int y = centerY + (int)(clampedPitch / maxAngle * (maxOffset - radius));
-    // Clear the previous circle
-    tft.fillCircle(oldX, oldY, radius, BLACK);
-    // draw central mark
-    tft.fillCircle(centerX, centerY, radius + 2, WHITE);
-    // Draw the red circle
-    tft.fillCircle(x, y, radius, RED);
-    oldX = x; // update oldX
-    oldY = y; // update oldY
+    // draw only if position changed
+    if(x != oldX || y != oldY)
+    {
+      // Clear the previous circle
+      tft.fillCircle(oldX, oldY, radius, BLACK);
+      // draw central mark
+      tft.fillCircle(centerX, centerY, radius + 2, WHITE);
+      // Draw the red circle
+      tft.fillCircle(x, y, radius, RED);
+      oldX = x; // update oldX
+      oldY = y; // update oldY 
+    }
   }
   else
   {
@@ -155,42 +299,6 @@ void drawCurrentState()
     // clear central mark
     tft.fillCircle(centerX, centerY, radius + 2, BLACK);
   }
-  // draw pitch and roll 
-  // draw roll
-  tft.fillRect(60, 95, 43, 20, BLACK);
-  tft.setCursor(60, 96);
-  if(roll < 0)
-    tft.setTextColor (BLUE, BLACK);
-  else
-    tft.setTextColor (RED, BLACK);
-  if (isHorizontal())
-    tft.print(abs((int)roll));
-  else
-  {
-    const int tmp = (int)(10.0*AccelZ/AccelScaleFactor);
-    tft.print(1.0*tmp/10, 1);
-  }
-  // draw pitch
-  tft.fillRect(160, 95, 40, 20, BLACK);
-  tft.setCursor(160, 95);
-  if(pitch < 0)
-    tft.setTextColor (BLUE, BLACK);
-  else
-    tft.setTextColor (RED, BLACK);
-  if (isHorizontal())
-    tft.print(abs((int)pitch));
-  else
-    tft.print(abs(89 - (int)pitch));
-  // Calculate summary acceleration (magnitude)
-  double Ax = (double)AccelX / AccelScaleFactor;
-  double Ay = (double)AccelY / AccelScaleFactor;
-  double Az = (double)AccelZ / AccelScaleFactor;
-  double summaryAccel = sqrt(Ax * Ax + Ay * Ay + Az * Az);
-  // Output it in the center of the screen
-  tft.fillRect(90, 160, 60, 20, BLACK);
-  tft.setCursor(92, 161);
-  tft.setTextColor(WHITE, BLACK);
-  tft.print(summaryAccel, 2);
 }
 
 void calibration() 
@@ -275,13 +383,21 @@ void setup()
   tft.setRotation (2);
   tft.fillScreen (BLACK);  
   delay(1000);
-  mpu.setXAccelOffset(-7288);
-  mpu.setYAccelOffset(4483);
-  mpu.setZAccelOffset(10167);
-  mpu.setXGyroOffset(-38);
-  mpu.setYGyroOffset(-40);
-  mpu.setZGyroOffset(-40);
-  //calibration();
+  if(1)
+  {
+    // I got this values from calibration
+    mpu.setXAccelOffset(-7288);
+    mpu.setYAccelOffset(4483);
+    mpu.setZAccelOffset(10167);
+    mpu.setXGyroOffset(-38);
+    mpu.setYGyroOffset(-40);
+    mpu.setZGyroOffset(-40);
+  }
+  else
+  {
+    // do calibration
+    calibration();
+  }
   delay(1000);
   createDial ();
 }
