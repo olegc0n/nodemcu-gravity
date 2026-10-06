@@ -30,14 +30,6 @@ int16_t GyroX = 0;
 int16_t GyroY = 0;
 int16_t GyroZ = 0;
 
-// return if is device is horizontally placed
-bool isHorizontal()
-{
-  if (abs((double)AccelZ/AccelScaleFactor) > 0.15)
-    return true;
-  return false;
-}
-
 void readMPUData(float &roll, float &pitch) 
 {
   // sensitivity scale factor respective to full scale setting provided in datasheet 
@@ -52,17 +44,8 @@ void readMPUData(float &roll, float &pitch)
   const double Gz = (double)GyroZ/GyroScaleFactor;
 
   // formula from https://wiki.dfrobot.com/How_to_Use_a_Three-Axis_Accelerometer_for_Tilt_Sensing
-  if (isHorizontal())
-  {
-    roll = atan2(Ay , Az) * 180.0 / PI;
-    pitch = atan2(-Ax , sqrt(Ay * Ay + Az * Az)) * 180.0 / PI; //account for roll already applied
-  }
-  else
-  {
-    roll = 0;
-    pitch = atan2(-Ax , sqrt(Ay * Ay + Az * Az)) * 180.0 / PI; //account for roll already applied
-  }
-
+  roll = atan2(Ay , Az) * 180.0 / PI;
+  pitch = atan2(-Ax , sqrt(Ay * Ay + Az * Az)) * 180.0 / PI; //account for roll already applied
   return;
   Serial.print("Ax: "); Serial.print(Ax);
   Serial.print(" Ay: "); Serial.print(Ay);
@@ -108,11 +91,9 @@ void createDial ()
 class Indicator 
 {
 public:
-    Indicator(int x, int y, bool showInt = true) : m_x(x), m_y(y), m_maxTimestamp(millis()), m_index(0), m_value(0.0f),
-      m_oldShownValue(0.), m_oldShownMaxValue(0.), m_visible(true), m_showInt(showInt)
+    Indicator(int x, int y, bool showInt = true) : m_x(x), m_y(y), m_value(0.0f),
+      m_oldShownValue(0.), m_visible(true), m_showInt(showInt)
     {
-        for (int i = 0; i < MAX_INDICATOR_SIZE; ++i) 
-            m_maxValue[i] = 0.0f; // initialize max values
     }
     void setVisible(bool visible) 
     {
@@ -125,97 +106,40 @@ public:
     }
     void setValue(float value) 
     {
-        unsigned long now = millis();
-        // each second we start to feel a new cell. After 10 seconsds all cell will be filled
-        if (now - m_maxTimestamp > (m_index + 1) * 1000 && m_index < MAX_INDICATOR_SIZE - 1)
-        {
-            ++m_index;
-        }
-        // if we feeled all cells we need to shift them each seconds
-        if (m_index == MAX_INDICATOR_SIZE - 1) 
-        {
-          // each seconds we shift all values
-          if (now - m_maxTimestamp > 1000) 
-          {
-            for (int i = 0; i < MAX_INDICATOR_SIZE - 1; ++i) 
-              m_maxValue[i] = m_maxValue[i + 1]; // shift values
-            m_maxValue[MAX_INDICATOR_SIZE - 1] = 0; // reset last value
-            // update the timestamp
-            m_maxTimestamp = now;
-          }
-        }
-        // update the value
-        m_value = value; // store the current value
-        for (int i = 0; i <= m_index; ++i) 
-        {
-          if(abs(m_maxValue[i]) < abs(value))
-            m_maxValue[i] = value;
-        }
-        update();
+      // update the value
+      m_value = value; // store the current value
+      update();
     }
     void update()
     {
-      if (!m_visible)
+      if (m_showInt)
       {
-        Serial.println("Indicator values: ");
-        for (int i = 0; i < MAX_INDICATOR_SIZE; ++i)
+        const int value2show = abs((int)m_value);
+        if ((int)m_oldShownValue != value2show)
         {
-          Serial.print(" ,");
-          Serial.print(m_maxValue[i]);
+          tft.fillRect(m_x, m_y, 50, 16, BLACK);
+          tft.setCursor(m_x, m_y);
+          if(m_value < 0)
+            tft.setTextColor (BLUE, BLACK);
+          else
+            tft.setTextColor (RED, BLACK);
+          tft.print(value2show);
+          m_oldShownValue = value2show; // update old shown value
         }
-        Serial.println();
       }
       else
       {
-        if (m_showInt)
+        const float value2show = m_value;
+        if (abs(m_oldShownValue - value2show) > 0.05)
         {
-          const int value2show = abs((int)m_value);
-          const int maxValue2show = abs((int)m_maxValue[0]);
-          if ((int)m_oldShownValue != value2show || (int)m_oldShownMaxValue != maxValue2show)
-          {
-            tft.fillRect(m_x, m_y, 50, 50, BLACK);
-            tft.setCursor(m_x, m_y);
-            if(isHorizontal())
-            {
-              if(m_value < 0)
-                tft.setTextColor (BLUE, BLACK);
-              else
-                tft.setTextColor (RED, BLACK);
-            }
-            else
-              tft.setTextColor(ORANGE, BLACK);
-            tft.print(value2show);
-            m_oldShownValue = value2show; // update old shown value
-            tft.setTextColor(ORANGE, BLACK);
-            tft.setCursor(m_x, m_y + 20);
-            tft.print(maxValue2show);
-            m_oldShownMaxValue = maxValue2show; // update old shown max value
-          }
-        }
-        else
-        {
-          const float value2show = m_value;
-          const float maxValue2show = m_maxValue[0];
-          if (abs(m_oldShownValue - value2show) > 0.05 || abs(m_oldShownMaxValue - maxValue2show) > 0.05)
-          {
-            tft.fillRect(m_x, m_y, 50, 50, BLACK);
-            tft.setCursor(m_x, m_y);
-            if(isHorizontal())
-            {
-              if(m_value < 0)
-                tft.setTextColor (BLUE, BLACK);
-              else
-                tft.setTextColor (RED, BLACK);
-            }
-            else
-              tft.setTextColor(ORANGE, BLACK);
-            tft.print(value2show, 2);
-            m_oldShownValue = value2show; // update old shown value
-            tft.setTextColor(ORANGE, BLACK);
-            tft.setCursor(m_x, m_y + 20);
-            tft.print(maxValue2show, 2);
-            m_oldShownMaxValue = maxValue2show; // update old shown max value
-          }
+          tft.fillRect(m_x, m_y, 85, 16, BLACK);
+          tft.setCursor(m_x, m_y);
+          if(m_value < 0)
+            tft.setTextColor (BLUE, BLACK);
+          else
+            tft.setTextColor (RED, BLACK);
+          tft.print(value2show, 2);
+          m_oldShownValue = value2show; // update old shown value
         }
       }
     }
@@ -223,20 +147,14 @@ private:
     int m_x = 0;
     int  m_y = 0;
     float m_oldShownValue = 0.;
-    float m_oldShownMaxValue = 0.;
-    static const int MAX_INDICATOR_SIZE = 10; // maximum size of the indicator
-    // array to store max values
-    float m_maxValue[MAX_INDICATOR_SIZE];
     float m_value = 0.;
-    int m_index = 0; // current index which we feel
-    unsigned long m_maxTimestamp;
     bool m_visible = true;
     bool m_showInt = true; // show integer values or float
 };
 
-Indicator rollIndicator(60, 95);
-Indicator pitchIndicator(160, 95);
-Indicator accelIndicator(90, 160, false); // show float values
+Indicator rollIndicator(40, 85, false);
+Indicator pitchIndicator(160, 85, false);
+//Indicator accelIndicator(90, 160, false); // show float values
 
 void drawCurrentState()
 {
@@ -255,49 +173,39 @@ void drawCurrentState()
   tft.setTextSize(2);
 
   // draw roll
-  rollIndicator.setValue(isHorizontal() ? roll : 100.0*AccelZ/AccelScaleFactor); // update the indicator with roll value
+  rollIndicator.setValue(roll); // update the indicator with roll value
   
   // draw pitch
-  pitchIndicator.setValue(isHorizontal() ? pitch : 89. - pitch); // update the indicator with pitch value
+  pitchIndicator.setValue(pitch); // update the indicator with pitch value
   
   // Calculate summary acceleration (magnitude)
-  double Ax = (double)AccelX / AccelScaleFactor;
-  double Ay = (double)AccelY / AccelScaleFactor;
-  double Az = (double)AccelZ / AccelScaleFactor;
-  double summaryAccel = sqrt(Ax * Ax + Ay * Ay + Az * Az);
-  accelIndicator.setValue(summaryAccel); // update the indicator with summary acceleration value
+  //double Ax = (double)AccelX / AccelScaleFactor;
+  //double Ay = (double)AccelY / AccelScaleFactor;
+  //double Az = (double)AccelZ / AccelScaleFactor;
+  //double summaryAccel = sqrt(Ax * Ax + Ay * Ay + Az * Az);
+  //accelIndicator.setValue(summaryAccel); // update the indicator with summary acceleration value
 
-  // Draw red circle based on roll and pitch if horizontal
-  if (isHorizontal()) 
-  {
-    // Map roll and pitch to display coordinates
-    // Assume roll and pitch range from -45 to +45 degrees
-    const float maxAngle = 90.0;
-    // Clamp roll and pitch
-    float clampedRoll = constrain(roll, -maxAngle, maxAngle);
-    float clampedPitch = constrain(pitch, -maxAngle, maxAngle);
-    // Map to display (move circle from center to edge)
-    const int x = centerX - (int)(clampedRoll / maxAngle * (maxOffset - radius));
-    const int y = centerY + (int)(clampedPitch / maxAngle * (maxOffset - radius));
-    // draw only if position changed
-    if(x != oldX || y != oldY)
-    {
-      // Clear the previous circle
-      tft.fillCircle(oldX, oldY, radius, BLACK);
-      // draw central mark
-      tft.fillCircle(centerX, centerY, radius + 2, WHITE);
-      // Draw the red circle
-      tft.fillCircle(x, y, radius, RED);
-      oldX = x; // update oldX
-      oldY = y; // update oldY 
-    }
-  }
-  else
+  // Draw red circle based on roll and pitch
+  // Map roll and pitch to display coordinates
+  // Assume roll and pitch range from -45 to +45 degrees
+  const float maxAngle = 90.0;
+  // Clamp roll and pitch
+  float clampedRoll = constrain(roll, -maxAngle, maxAngle);
+  float clampedPitch = constrain(pitch, -maxAngle, maxAngle);
+  // Map to display (move circle from center to edge)
+  const int x = centerX - (int)(clampedRoll / maxAngle * (maxOffset - radius));
+  const int y = centerY + (int)(clampedPitch / maxAngle * (maxOffset - radius));
+  // draw only if position changed
+  if(x != oldX || y != oldY)
   {
     // Clear the previous circle
     tft.fillCircle(oldX, oldY, radius, BLACK);
-    // clear central mark
-    tft.fillCircle(centerX, centerY, radius + 2, BLACK);
+    // draw central mark
+    tft.fillCircle(centerX, centerY, radius + 2, WHITE);
+    // Draw the red circle
+    tft.fillCircle(x, y, radius, RED);
+    oldX = x; // update oldX
+    oldY = y; // update oldY 
   }
 }
 
@@ -386,12 +294,12 @@ void setup()
   if(1)
   {
     // I got this values from calibration
-    mpu.setXAccelOffset(-7288);
-    mpu.setYAccelOffset(4483);
-    mpu.setZAccelOffset(10167);
-    mpu.setXGyroOffset(-38);
-    mpu.setYGyroOffset(-40);
-    mpu.setZGyroOffset(-40);
+    mpu.setXAccelOffset(-7254);
+    mpu.setYAccelOffset(4320);
+    mpu.setZAccelOffset(9998);
+    mpu.setXGyroOffset(-37);
+    mpu.setYGyroOffset(-41);
+    mpu.setZGyroOffset(-36);
   }
   else
   {
